@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>On the Impact of Instruction Address Translation Overhead</title>
+    <meta charset="utf-8">
+    <style type="text/css">
+      @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+      @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
+      @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+
+      body { font-family: 'Droid Serif'; }
+      h1, h2, h3 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: normal;
+      }
+      .title-institution { font-size: 12pt; }
+      .title-email {
+        font-size: 12pt;
+        font-style: italic;
+      }
+      .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono'; }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+
+class: center, middle
+
+# On the Impact of Instruction Address Translation Overhead
+
+**Yufeng Zhou**¹, Xiaowan Dong², Alan L. Cox¹, Sandhya Dwarkadas²
+
+<div class="title-institution">¹Department of Computer Science, Rice University</div>
+
+<div class="title-email">{yufengz, alc}@rice.edu</div>
+
+<div class="title-institution">²Department of Computer Science, University of Rochester</div>
+
+<div class="title-email">{xdong, sandhya}@cs.rochester.edu</div>
+
+---
+
+class: center, middle
+
+# Introduction
+
+---
+
+# Computing systems support large amounts of physical memory
+
+- Up to terabytes (TODO cite)
+- To accommodate memory-hungry applications such as in-memory databases
+
+---
+
+# Virtual memory
+
+- Immensely useful
+  - A linear address space abstraction: easy to program
+  - Isolation: security and reliability
+  - ...
+- Ubiquitous
+--
+
+- Not without overhead
+- **Address translation**
+--
+
+- Virtual-to-physical translation information stored in page tables
+--
+
+- Accessing page tables (i.e. page walk) is expensive
+  - 4-level page table organization in recent generations of x86 processors
+  - Up to *hundreds* of cycles to do a single page walk (TODO citation?)
+--
+
+- Translation lookaside buffers (TLBs) cache recently used translations
+  - Down to &lt;10 cycles
+  - Problem solved?
+
+---
+
+# A TLB’s size cannot scale at the same rate as physical memory
+
+- Latency and energy efficiency constraints
+--
+
+- From Haswell (2013) to Kaby Lake (2018), Intel's second-level TLB grew from 1024 entries to 1536 entries.
+- In the meantime, supported physical memory has more than doubled on these systems.
+
+---
+
+# Many have sought to reduce the address translation overhead for data accesses
+
+- Data usually accounts for the majority of an application's memory footprint.
+- TODO cite
+
+---
+
+class: center, middle
+
+# But what about address translation overhead on instruction accesses?
+
+---
+
+# Instruction Address Translation Overhead
+
+- Much less attention has been paid to the performance impact of this overhead, at either the architectural or operating system level.
+--
+
+- On an Intel Xeon E3-1240 v5 (Skylake) processor, the PostgreSQL database executing a select-only workload spends up to **14.9%** of its execution cycles stalled on instruction address translation.
+--
+
+- Intel documentation recommends that instruction address translation stalls be kept under **5%** of execution cycles.
+
+---
+
+# Outline
+
+- Introduction
+- **x86-64 Instruction Address Translation**
+- Superpages
+- Padding
+
+    </textarea>
+    <script src="https://remarkjs.com/downloads/remark-latest.min.js">
+    </script>
+    <script>
+      var slideshow = remark.create({
+        ratio: '16:9',
+      });
+    </script>
+  </body>
+</html>
