@@ -46,10 +46,10 @@ class: center, middle
 
 ---
 
-# Computing systems support large amounts of physical memory
+# Large amounts of physical memory
 
-- Up to terabytes (TODO cite)
-- To accommodate memory-hungry applications such as in-memory databases
+- Up to terabytes supported by modern computing systems.
+- To accommodate memory-hungry applications such as in-memory databases.
 
 ---
 
@@ -58,6 +58,8 @@ class: center, middle
 - Immensely useful
   - A linear address space abstraction: easy to program
   - Isolation: security and reliability
+  - Overcommitment: use more memory than physically available
+  - Share physical memory: deduplication
   - ...
 - Ubiquitous
 --
@@ -69,9 +71,9 @@ class: center, middle
 - Virtual-to-physical translation information stored in page tables
 --
 
-- Accessing page tables (i.e. page walk) is expensive
+- Accessing page tables to perform a translation (i.e. page walk) is expensive
   - 4-level page table organization in recent generations of x86 processors
-  - Up to *hundreds* of cycles to do a single page walk (TODO citation?)
+  - Up to *hundreds* of cycles to do a single page walk
 --
 
 - Translation lookaside buffers (TLBs) cache recently used translations
@@ -80,21 +82,33 @@ class: center, middle
 
 ---
 
-# A TLB’s size cannot scale at the same rate as physical memory
+# A TLB has limited capacity
 
+- Cannot scale at the same rate as physical memory
 - Latency and energy efficiency constraints
 --
 
 - From Haswell (2013) to Kaby Lake (2018), Intel's second-level TLB grew from 1024 entries to 1536 entries.
-- In the meantime, supported physical memory has more than doubled on these systems.
+- In the meantime, supported physical memory has more than doubled.
 
 ---
 
-# Many have sought to reduce the address translation overhead for data accesses
+# Instruction access vs data access
 
-- Data usually accounts for the majority of an application's memory footprint.
-- TODO cite
+- Different protections: RX vs. RW
+--
 
+- Different sizes: data usually accounts for the majority of an application's memory footprint.
+--
+
+- Different locality
+--
+
+- Different "criticality"
+--
+
+- Many have sought to reduce address translation overhead for data accesses.
+  - Gorman et al. (WIOSCA 2010), Ingens (OSDI 16), SmartMD (ATC 17), Carrefour-LP (ATC 14), Illuminator (ASPLOS 18), Basu et al. (ISCA 13), Karakostas et al. (ISCA 15), TLB coalescing (MICRO 12, HPCA 14, ISCA 17), ...
 ---
 
 class: center, middle
@@ -112,15 +126,304 @@ class: center, middle
 --
 
 - Intel documentation recommends that instruction address translation stalls be kept under **5%** of execution cycles.
+--
+
+- Overhead exacerbated by two trends.
+    1. The ever increasing size and complexity of the applications.
+        - The Clang compiler has increased in size from 31MB of x86 machine code in version 3.0 (2012) to 56MB in version 6.0.0 (2018).
+        - A recent version of the Node.js run-time environment uses 20 shared libraries.
+--
+    2. The ever increasing parallelism in modern applications and hardware platforms: greater competition for shared hardware resources, such as TLBs and caches.
+        - Multi-core and SMT.
+        - Multi-process applications (e.g. PostgreSQL) and multi-process workloads (e.g. parallel compilation with Clang).
 
 ---
 
 # Outline
 
 - Introduction
-- **x86-64 Instruction Address Translation**
+- **x86 Instruction Address Translation**
 - Superpages
-- Padding
+- Padding and Page Table Sharing
+- Conclusions and Future Work
+
+---
+
+# x86 Address Translation
+
+![x86 Address Translation](./x86_addr_trans_1.svg)
+
+---
+
+# x86 Address Translation
+
+![x86 Address Translation](./x86_addr_trans_2.svg)
+
+---
+
+# x86 Address Translation
+
+![x86 Address Translation](./x86_addr_trans_3.svg)
+
+---
+
+# x86 Address Translation
+
+![x86 Address Translation](./x86_addr_trans_4.svg)
+
+---
+
+# Outline
+
+- Introduction
+- x86 Instruction Address Translation
+- **Superpages**
+- Padding and Page Table Sharing
+- Conclusions and Future Work
+
+---
+
+# Superpages
+
+- Increase TLB coverage.
+- Modern processors support superpages of potentially multiple sizes.
+- TLBs provide a growing number of entries for superpage mappings.
+--
+
+- Skylake TLB configuration.
+.right[![Skylake TLB](./skylake_tlb.png)]
+
+---
+
+# OS Support for Code Superpages
+
+- Linux does not transparently support superpages on code from a regular file system.
+- FreeBSD automatically and transparently supports code from any file system.
+--
+
+  - Reservation-based page allocator
+  - Incremental promotion
+  - A conservative policy
+--
+
+.right[![FreeBSD superpage support](./freebsd_reserv.png)]
+
+---
+
+# The Impact of FreeBSD's Automatic Code Superpages
+
+Percentage of execution cycles servicing instruction address translation - user space.
+
+![FreeBSD itlb impact](./itlb_overhead_1.png)
+
+---
+
+# The Impact of FreeBSD's Automatic Code Superpages
+
+Percentage of execution cycles servicing instruction address translation - user space.
+
+![FreeBSD itlb impact](./itlb_overhead_2.png)
+
+- No superpages on PostgreSQL under FreeBSD's default policy.
+
+---
+
+# PostgreSQL Main Executable (5.953 MB) Page Fault Trace - First 2M Region
+
+<img src="./postgres_ktrace_1st.png" width="798.6" height="441.1"/>
+
+---
+
+# PostgreSQL Main Executable (5.953 MB) Page Fault Trace
+
+<img src="./postgres_ktrace_1.png" width="1056" height="202"/>
+
+---
+
+# PostgreSQL Main Executable (5.953 MB) Page Fault Trace
+
+<img src="./postgres_ktrace_2.png" width="1056" height="202"/>
+
+- I/O clustering
+--
+
+- Bring in the missing 64KB clusters and promote?
+
+---
+
+# Relaxing FreeBSD's Superpage Policy
+
+Normalized execution cycles under 4 different promotion thresholds.
+
+![Thresholds](./superpg_exec_aggressive.svg)
+
+---
+
+# The Impact on Data Address Translation
+
+- The second-level TLB is shared between code and data.
+--
+
+- Improving address translation performance in the ITLB can significantly
+  reduce the address translation overhead for data accesses!
+
+![Data page walk](./superpg_pgwalk_aggressive.svg)
+
+---
+
+# PostgreSQL Main Executable (5.953 MB) Page Fault Trace
+
+<img src="./postgres_ktrace_2.png" width="1056" height="202"/>
+
+---
+
+# PostgreSQL Main Executable (5.953 MB) Page Fault Trace
+
+<img src="./postgres_ktrace_3.png" width="1056" height="202"/>
+
+- Residual code region
+--
+
+- Mapped as 4KB base pages
+- Hundreds of mappings
+  - PostgreSQL accesses more than 64 of these pages.
+  - 4KB page mappings spill into the STLB, potentially displacing 2MB page mappings for data.
+
+---
+
+# Outline
+
+- Introduction
+- x86 Instruction Address Translation
+- Superpages
+- **Padding and Page Table Sharing**
+- Conclusions and Future Work
+
+---
+
+# Padding
+
+- Pad out the residual code region so that it can be mapped as a superpage.
+--
+
+- Two ways
+    - Ask the *linker* to bloat the executable segment up to the next superpage boundary.
+    - The *kernel* automatically extends the executable mapping up to the next superpage boundary, back the residual code region with a reservation, and fill in the gap following residual code.
+        - Optimization: pages backing the data segment can be used as part of the padding.
+
+---
+
+# Page Table Sharing
+
+- Shared libraries
+  - Too small to be mapped as superpages.
+  - Common libraries are referenced across different processes and applications, e.g. libc, libcrypto, libm, libthr, libssl.
+--
+
+- Share leaf-level page table pages!
+
+---
+
+# Page Table Sharing
+
+![x86 Address Translation](./x86_addr_trans_5.svg)
+
+---
+
+# Page Table Sharing
+
+- Leaf-level page table pages (PTPs) outlive the processes referencing them.
+- Attach the shared PTPs to the *vm_object*, which tracks a file's resident pages.
+- Use an unused and non-reserved bit in the higher level page table entry to mark the presence of a lower-level shared PTP in the page table hierarchy.
+- Force 2MB virtual alignment of (executable) text sections to maximize usage of shared PTPs across processes with different address space layouts.
+
+---
+
+# Padding and Page Table Sharing
+
+PostgreSQL user-space results
+
+<img src="./postgres_padding_sptp_usr.png" width="781.5" height="459"/>
+
+---
+
+# Page Table Sharing
+
+- De-duplicates page table data in the LLC.
+- Leads to significantly fewer data and instruction page table walk cycles.
+--
+
+
+PostgreSQL average cycles per instruction page table walk with and without page table sharing.
+
+<img src="./postgres_sptp_itlb_walk_cost.png" width="781.5" height="390"/>
+
+---
+
+# Padding and Page Table Sharing
+
+- Reduce the amount of work done in the OS.
+  - Process creation and teardown become faster.
+--
+
+    - Padding: hundreds of leaf-level PTEs replaced with just a single upper-level PTE.
+    - Page table sharing:
+      - Insert entire shared PTPs directly at process creation.
+      - Skip over shared PTPs during process teardown.
+--
+
+<img src="./postgres_padding_sptp_os.png" width="626.4" height="339.6"/>
+
+---
+
+# Padding and Page Table Sharing
+
+PostgreSQL user-space results
+
+<img src="./postgres_padding_sptp_usr_18.png" width="781.5" height="459"/>
+
+---
+
+# Padding and Page Table Sharing
+
+Percentage of execution cycles servicing instruction address translation - user space.
+
+![FreeBSD itlb impact](./itlb_overhead_3.png)
+
+---
+
+# Padding and Page Table Sharing
+
+- Execution cycles reduced by more than the instruction address translation overhead.
+  - The data side is synergistically benefiting from less contention in the STLB and caches.
+
+---
+
+# Outline
+
+- Introduction
+- x86 Instruction Address Translation
+- Superpages
+- Padding and Page Table Sharing
+- **Conclusions and Future Work**
+
+---
+
+# Conclusions
+
+- The overhead of instruction address translation for a variety of widely used applications is non-trivial.
+  - This overhead increases as the level of parallelism goes up in modern applications and hardware platforms.
+- Three techniques help reduce instruction address translation overhead and therefore reduce overall execution cycles.
+  - Relaxing the superpage promotion policy for code.
+  - Padding residual code.
+  - Sharing page tables pages.
+- Improving address translation performance in the ITLB can reduce the address translation overhead for data accesses.
+  - Many modern microarchitectures share the STLB between instruction and data translations.
+
+# Future Work
+
+- Interaction with compile-time optimizations.
+- Medium-sized mappings, e.g. 64KB mappings.
 
     </textarea>
     <script src="https://remarkjs.com/downloads/remark-latest.min.js">
@@ -128,6 +431,7 @@ class: center, middle
     <script>
       var slideshow = remark.create({
         ratio: '16:9',
+        countIncrementalSlides: false,
       });
     </script>
   </body>
