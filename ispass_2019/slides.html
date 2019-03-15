@@ -4,9 +4,9 @@
     <title>On the Impact of Instruction Address Translation Overhead</title>
     <meta charset="utf-8">
     <style type="text/css">
-      @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
-      @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
-      @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+      /* @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz); */
+      /* @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic); */
+      /* @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic); */
 
       body { font-family: 'Droid Serif'; }
       h1, h2, h3 {
@@ -44,139 +44,170 @@ class: center, middle
 
 # Introduction
 
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Large amounts of physical memory -->
+<!--  -->
+<!-- &#45; Up to terabytes supported by modern computing systems. -->
+<!-- &#45; To accommodate memory&#45;hungry applications such as in&#45;memory databases. -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Virtual memory -->
+<!--  -->
+<!-- &#45; Immensely useful -->
+<!--   &#45; A linear address space abstraction: easy to program -->
+<!--   &#45; Isolation: security and reliability -->
+<!--   &#45; Overcommitment: use more memory than physically available -->
+<!--   &#45; Share physical memory: deduplication -->
+<!--   &#45; ... -->
+<!-- &#45; Ubiquitous -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Not without overhead -->
+<!-- &#45; **Address translation** -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Virtual&#45;to&#45;physical translation information stored in page tables -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Accessing page tables to perform a translation (i.e. page walk) is expensive -->
+<!--   &#45; 4&#45;level page table organization in recent generations of x86 processors -->
+<!--   &#45; Up to *hundreds* of cycles to do a single page walk -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Translation lookaside buffers (TLBs) cache recently used translations -->
+<!--   &#45; Down to &#38;lt;10 cycles -->
+<!--   &#45; Problem solved? -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # A TLB has limited capacity -->
+<!--  -->
+<!-- &#45; Cannot scale at the same rate as physical memory -->
+<!-- &#45; Latency and energy efficiency constraints -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; From Haswell (2013) to Kaby Lake (2018), Intel's second&#45;level TLB grew from 1024 entries to 1536 entries. -->
+<!-- &#45; In the meantime, supported physical memory has more than doubled. -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Instruction access vs data access -->
+<!--  -->
+<!-- &#45; Different protections: RX vs. RW -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Different sizes: data usually accounts for the majority of an application's memory footprint. -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Different locality -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Different "criticality" -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Many have sought to reduce address translation overhead for data accesses. -->
+<!--   &#45; Gorman et al. (WIOSCA 2010), Ingens (OSDI 16), SmartMD (ATC 17), Carrefour&#45;LP (ATC 14), Illuminator (ASPLOS 18), Basu et al. (ISCA 13), Karakostas et al. (ISCA 15), TLB coalescing (MICRO 12, HPCA 14, ISCA 17), ... -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- class: center, middle -->
+<!--  -->
+<!-- # But what about address translation overhead on instruction accesses? -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Instruction Address Translation Overhead -->
+<!--  -->
+<!-- &#45; Much less attention has been paid to the performance impact of this overhead, at either the architectural or operating system level. -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; On an Intel Xeon E3&#45;1240 v5 (Skylake) processor, the PostgreSQL database executing a select&#45;only workload spends up to **14.9%** of its execution cycles stalled on instruction address translation. -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Intel documentation recommends that instruction address translation stalls be kept under **5%** of execution cycles. -->
+<!-- &#45;&#45; -->
+<!--  -->
+<!-- &#45; Overhead exacerbated by two trends. -->
+<!--     1. The ever increasing size and complexity of the applications. -->
+<!--         &#45; The Clang compiler has increased in size from 31MB of x86 machine code in version 3.0 (2012) to 56MB in version 6.0.0 (2018). -->
+<!--         &#45; A recent version of the Node.js run&#45;time environment uses 20 shared libraries. -->
+<!-- &#45;&#45; -->
+<!--     2. The ever increasing parallelism in modern applications and hardware platforms: greater competition for shared hardware resources, such as TLBs and caches. -->
+<!--         &#45; Multi&#45;core and SMT. -->
+<!--         &#45; Multi&#45;process applications (e.g. PostgreSQL) and multi&#45;process workloads (e.g. parallel compilation with Clang). -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Outline -->
+<!--  -->
+<!-- &#45; Introduction -->
+<!-- &#45; Superpages -->
+<!-- &#45; Padding and Page Table Sharing -->
+<!-- &#45; Conclusions and Future Work -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # x86 Address Translation -->
+<!--  -->
+<!-- ![x86 Address Translation](./x86_addr_trans_1.svg) -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # x86 Address Translation -->
+<!--  -->
+<!-- ![x86 Address Translation](./x86_addr_trans_2.svg) -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # x86 Address Translation -->
+<!--  -->
+<!-- ![x86 Address Translation](./x86_addr_trans_3.svg) -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # x86 Address Translation -->
+<!--  -->
+<!-- ![x86 Address Translation](./x86_addr_trans_4.svg) -->
+
 ---
 
-# Large amounts of physical memory
+# Code Superpages: Missed Opportunities
 
-- Up to terabytes supported by modern computing systems.
-- To accommodate memory-hungry applications such as in-memory databases.
-
----
-
-# Virtual memory
-
-- Immensely useful
-  - A linear address space abstraction: easy to program
-  - Isolation: security and reliability
-  - Overcommitment: use more memory than physically available
-  - Share physical memory: deduplication
-  - ...
-- Ubiquitous
---
-
-- Not without overhead
-- **Address translation**
---
-
-- Virtual-to-physical translation information stored in page tables
---
-
-- Accessing page tables to perform a translation (i.e. page walk) is expensive
-  - 4-level page table organization in recent generations of x86 processors
-  - Up to *hundreds* of cycles to do a single page walk
---
-
-- Translation lookaside buffers (TLBs) cache recently used translations
-  - Down to &lt;10 cycles
-  - Problem solved?
-
----
-
-# A TLB has limited capacity
-
-- Cannot scale at the same rate as physical memory
-- Latency and energy efficiency constraints
---
-
-- From Haswell (2013) to Kaby Lake (2018), Intel's second-level TLB grew from 1024 entries to 1536 entries.
-- In the meantime, supported physical memory has more than doubled.
-
----
-
-# Instruction access vs data access
-
-- Different protections: RX vs. RW
---
-
-- Different sizes: data usually accounts for the majority of an application's memory footprint.
---
-
-- Different locality
---
-
-- Different "criticality"
---
-
-- Many have sought to reduce address translation overhead for data accesses.
-  - Gorman et al. (WIOSCA 2010), Ingens (OSDI 16), SmartMD (ATC 17), Carrefour-LP (ATC 14), Illuminator (ASPLOS 18), Basu et al. (ISCA 13), Karakostas et al. (ISCA 15), TLB coalescing (MICRO 12, HPCA 14, ISCA 17), ...
----
-
-class: center, middle
-
-# But what about address translation overhead on instruction accesses?
-
----
-
-# Instruction Address Translation Overhead
-
-- Much less attention has been paid to the performance impact of this overhead, at either the architectural or operating system level.
---
-
-- On an Intel Xeon E3-1240 v5 (Skylake) processor, the PostgreSQL database executing a select-only workload spends up to **14.9%** of its execution cycles stalled on instruction address translation.
---
-
-- Intel documentation recommends that instruction address translation stalls be kept under **5%** of execution cycles.
---
-
+- Significant virtual-to-physical address translation overhead for instruction access.
+    - PostgreSQL on a recent Intel Xeon processor: up to **14.9%** of execution cycles experience instruction address translation stalls.
+    - Intel documentation recommends that this overhead be kept under **5%**.
 - Overhead exacerbated by two trends.
-    1. The ever increasing size and complexity of the applications.
-        - The Clang compiler has increased in size from 31MB of x86 machine code in version 3.0 (2012) to 56MB in version 6.0.0 (2018).
-        - A recent version of the Node.js run-time environment uses 20 shared libraries.
---
-    2. The ever increasing parallelism in modern applications and hardware platforms: greater competition for shared hardware resources, such as TLBs and caches.
+    1. Applications are getting bigger and more complex.
+        - The Clang compiler: 31MB (2012) &rarr; 56MB (2018).
+        - A recent version of Node.js: 20 shared libraries.
+    2. The level of parallelism is increasing.
         - Multi-core and SMT.
         - Multi-process applications (e.g. PostgreSQL) and multi-process workloads (e.g. parallel compilation with Clang).
+- Superpages reduce address translation overhead.
+- Operating systems have supported superpages for a while now.
+    - For example, FreeBSD automatically and transparently supports superpages on code from any file system.
+- Problem solved?
+
+???
+The level of parallelism is increasing: greater competition for shared hardware resources, such as TLBs and caches.
+
+---
+
+# Code Superpages: Missed Opportunities
+
+- A single superpage policy for both code and data.
+    - Current implementations of and prior work on superpage support in the OS.
+- *One policy does not fit all!*
+- Example: PostgreSQL
+    - No superpage created under current policy.
+    - A small change in policy and mapping ~2/3 of the main executable with superpages: **8.5%** reduction in execution cycles!
 
 ---
 
 # Outline
 
 - Introduction
-- **x86 Instruction Address Translation**
-- Superpages
-- Padding and Page Table Sharing
-- Conclusions and Future Work
-
----
-
-# x86 Address Translation
-
-![x86 Address Translation](./x86_addr_trans_1.svg)
-
----
-
-# x86 Address Translation
-
-![x86 Address Translation](./x86_addr_trans_2.svg)
-
----
-
-# x86 Address Translation
-
-![x86 Address Translation](./x86_addr_trans_3.svg)
-
----
-
-# x86 Address Translation
-
-![x86 Address Translation](./x86_addr_trans_4.svg)
-
----
-
-# Outline
-
-- Introduction
-- x86 Instruction Address Translation
 - **Superpages**
 - Padding and Page Table Sharing
 - Conclusions and Future Work
@@ -294,7 +325,6 @@ Normalized execution cycles under 4 different promotion thresholds.
 # Outline
 
 - Introduction
-- x86 Instruction Address Translation
 - Superpages
 - **Padding and Page Table Sharing**
 - Conclusions and Future Work
@@ -402,7 +432,6 @@ Percentage of execution cycles servicing instruction address translation - user 
 # Outline
 
 - Introduction
-- x86 Instruction Address Translation
 - Superpages
 - Padding and Page Table Sharing
 - **Conclusions and Future Work**
