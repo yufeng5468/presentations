@@ -16,18 +16,18 @@
         font-weight: normal;
       }
       .remark-slide-content {
-        font-size: 18pt;
-        line-height: 1.3;
+        font-size: 22pt;
+        line-height: 1.25;
       }
       .remark-slide-content h1 {
         font-size: 32pt;
       }
       .remark-slide-number {
-        font-size: 16pt;
+        font-size: 18pt;
       }
-      .title-institution { font-size: 16pt; }
+      .title-institution { font-size: 18pt; }
       .title-email {
-        font-size: 16pt;
+        font-size: 18pt;
         font-style: italic;
       }
       .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono'; }
@@ -64,49 +64,51 @@ I'm very excited to be here today to talk about the "title".
     - Intel documentation: worth investigating if &gt;**5%**.
 
 ???
-So, to begin with, on a virtual memory system, when the processor needs to fetch an instruction from memory, it begins with a virtual address.
+So, to begin with, in a virtual memory system, when the processor needs to fetch an instruction from memory, it begins with a virtual address.
 
 ---
 
-# Instruction Address Translation - Superpages Present Opportunities
+# Instruction Address Translation - **Superpages Present Opportunities**
 
 ![Instruction address translation](./addr_trans_fast_slow_1.svg)
 
-- Translation lookaside buffer (TLB): caches virtual-to-physical translations for fast address translation.
-- Base pages: finer granularity, more translation information.
-- Superpages: coarser granularity, less translation information, potential memory bloat.
-
 ???
+Conceptually, the processor tries the fast path first, and if there isn't a hit.
+
 Depending on how large of a range of addresses the translation covers
 
 ---
 
-# Instruction Address Translation - Missed Opportunities
+# Instruction Address Translation - **Missed Opportunities**
 
-- Operating systems support superpages.
-- A single superpage (management) policy for both code and data.
-- *One policy does not fit all!*
+- Linux: No transparent and automatic superpages on code from a regular file system. Ugh. <font color="#ff6666">&#10008;</font>
+- **FreeBSD**: transparent and automatic superpages on code from any file system. <font color="#006633">&#10004;</font>
+    - A conservative superpage policy: Don't bring in extra base pages merely for the purpose of creating superpages. <font color="orange">&#8263;</font>
 - Example: PostgreSQL on latest FreeBSD.
     - No superpage created under current policy.
     - A *simple* change in policy &rarr; ~2/3 of the main executable mapped with superpages.
         - **8.5%** reduction in execution cycles!
 
 ???
-For example, FreeBSD automatically and transparently supports superpages on code from any file system.
-
 The problem with current implementations and prior work is that, although you get a varying number of superpages under different policies, and each policy excels in certain scenarios, existing policies share a common problem. That is that they essentially have a single policy for both code and data, and sometimes they just sort of ignore the code side. But as we know, code and data exhibit different locality and we showed just two slides earlier that the instruction address translation overhead is significant.
 
 In the rest of this talk, we are going to show techniques and simple heuristics that significantly reduce instruction address translation overhead.
+
+Say here that we are doing FreeBSD because it at least supports the creation of code superpages from regular file systems.
+
+This is emblematic of
 
 ---
 
 # Outline
 
 - Introduction
-- **Problem #1: A single superpage policy that is too conservative for code**
+- Problem #1: A superpage policy that is too conservative for code
 - Solution: Relax the superpage policy for code
 - Problem #2: The residual code region
 - Solution: Padding
+- Problem #3: Page table data duplication
+- Solution: Page table page sharing
 - Takeaways
 
 ???
@@ -116,108 +118,80 @@ The way this talk is organized, we are gonna basically go over the problems and 
 
 class: center, middle
 
-# Problem #1: A single superpage policy that is too conservative for code.
+# Problem #1: A superpage policy that is too conservative for code.
 
 ???
 With that, we are gonna jump right into problem #1
 
 ---
 
-# OS Support for Code Superpages
-
-- Linux: no transparent and automatic superpages on code from a regular file system.
-- FreeBSD: transparent and automatic superpages on code from any file system.
-    - A conservative superpage policy: Don't bring in extra base pages merely for the purpose of creating superpages.
-
-<!-- &#45;&#45;&#45; -->
-<!--  -->
-<!-- # The Impact of FreeBSD's Automatic Code Superpages -->
-<!--  -->
-<!-- Percentage of execution cycles servicing instruction address translation &#45; user space. -->
-<!--  -->
-<!-- ![FreeBSD itlb impact](./itlb_overhead_1.png) -->
-<!--  -->
-<!-- &#45;&#45;&#45; -->
-<!--  -->
-<!-- # The Impact of FreeBSD's Automatic Code Superpages -->
-<!--  -->
-<!-- Percentage of execution cycles servicing instruction address translation &#45; user space. -->
-<!--  -->
-<!-- ![FreeBSD itlb impact](./itlb_overhead_2.png) -->
-<!--  -->
-<!-- &#45; No superpages on PostgreSQL under FreeBSD's default policy. -->
-
----
-
 # PostgreSQL Main Executable (5.953 MB) Page Access Map - First 2M Region
 
-<img src="./postgres_ktrace_1st.png" width="798.6" height="441.1"/>
+![postgres ktrace](./postgres_ktrace_2m.svg)
 
 ---
 
-# PostgreSQL Main Executable (5.953 MB) Page Access Map - First 4M
+# PostgreSQL Main Executable (5.953 MB) Page Access Map - No Superpage in First 4M
 
-<img src="./postgres_ktrace_1.png" width="1056" height="202"/>
+![postgres ktrace](./postgres_ktrace_4m.svg)
+
+- Only X% pages are touched. So it isn't surprising that superpages aren't being created.
 
 ---
 
-# PostgreSQL Main Executable (5.953 MB) Page Access Map
+# PostgreSQL Main Executable (5.953 MB) Page Access Map - No Superpage in First 4M, but Actually Close
 
-<img src="./postgres_ktrace_2.png" width="1056" height="202"/>
+![postgres ktrace](./postgres_ktrace_4m_red_bars_0.svg)
 
-- I/O clustering: The file system reads from the disk at a 64KB granularity.
-- **Observation**: The executable is only a few 64KB away from being fully resident.
---
+- I/O clustering: The page fault handler reads from the disk at a 64KB granularity.
+- **Observation**: The 2M regions are only a few 64KB away from being fully resident. Really close to qualifying for superpages.
 
-- **Problem #1**: A single superpage policy that is too conservative for code.
+---
+
+# PostgreSQL Main Executable (5.953 MB) Page Access Map - No Superpage in First 4M, but Actually Close
+
+![postgres ktrace](./postgres_ktrace_4m_red_bars_1.svg)
+
+- **Problem #1**: A superpage policy that is too conservative for code.
 - **Solution**: Bring in the missing 64KB clusters and create a superpage.
-    - Need a threshold.
+    - Occupancy threshold.
 
 ???
 Now, whenever we aggressively does something in the OS, there is a question of threshold.
+
 ---
 
-# Solution #1: Relaxing the Superpage Policy
+# Relaxed Code Superpage Policy Evaluation
 
-Normalized execution cycles under 4 different superpage promotion thresholds.
-
-![Thresholds](./superpg_exec_aggressive.svg)
+![Thresholds](./superpg_exec_aggressive_color.svg)
+- 6 workloads, 4 thresholds (lower threshold is more aggressive)
 
 ???
 We can see from this figure that for all of the applications, a threshold of 15 is sufficient. A lower threshold or in other words a more aggressive policy doesn't really make a difference beyond that point. We believe this observation is generally applicable because code exhibits locality in the sense that the compiler tries to place functions with caller-callee relationships next to each other in the binary executable, and so if a code region should generally be heavily accessed if it's accessed at all.
 ---
 
-# The Impact on Data Address Translation
+# Instruction Address Translation's Impact on Data Address Translation
 
-TODO insert simple TLB configuration figure
+![TLB](./tlb_config.svg)
 
 - The second-level TLB (STLB): shared between code and data.
-- **Realization**: Improved instruction address translation performance &rarr; reduced address translation overhead for data accesses!
-
-![Data page walk](./superpg_pgwalk_aggressive.svg)
+    - Similar TLB organization in earlier Intel microarchitectures (e.g. Haswell (2013)).
+- **Realization**: Improved instruction address translation performance &rarr; Improved data address translation performance!
 
 ---
 
-# PostgreSQL Main Executable (5.953 MB) Page Access Map - First 4M
+# Improved Instruction Address Translation Performance &rarr; Improved Data Address Translation Performance
 
-<img src="./postgres_ktrace_2.png" width="1056" height="202"/>
+![Data page walk](./data_pgwalk_thld1.svg)
+
+---
+
+# Problem #1 and Solution Summary
+
+![postgres ktrace](./postgres_ktrace_4m_red_bars_1.svg)
 
 - We dealt with problem #1.
-
----
-
-# PostgreSQL Main Executable (5.953 MB) Page Access Map - Last "Almost 2M"
-
-<img src="./postgres_ktrace_3.png" width="1056" height="202"/>
-
-- Residual code region
-- Mapped as 4KB base pages
-- Hundreds of mappings
-  - PostgreSQL accesses more than 64 of these pages.
-  - The L1 instruction TLB (ITLB): 64 4KB mappings &rarr; spill into the second-level TLB (STLB).
-
-???
-, potentially displacing 2MB page mappings for data
+- And showed that improved instruction address translation performance &rarr; improved data address translation performance!
 
 ---
 
@@ -230,17 +204,64 @@ And so that brings us to problem #2, which is essentially the residual code regi
 
 ---
 
-# Solution #2: Padding
+# PostgreSQL Main Executable (5.953 MB) Page Access Map - Last "Almost 2M"
 
-- Pad out the residual code region so that it can be mapped as a superpage.
---
-
-- Two ways
-    - Ask the *linker* to bloat the executable file.
-    - Modify the *kernel* to automatically extend the executable mapping and fill in the gap following residual code.
-        - Optimization: pages backing the data segment can be used as part of the padding.
+![postgres ktrace](./postgres_ktrace_last2m.svg)
 
 ???
+The total size of the main executable is almost 6M, so almost three superpage-sized regions. The first two regions were shown earlier, and this is essentially the third region.
+
+---
+
+# Problem #2: The Residual Code Region
+
+![postgres ktrace](./postgres_ktrace_last2m_min.svg)
+
+- Code region rarely an integer multiple of 2M.
+- The residual code region: the &lt; 2M leftover region.
+    - 4KB base pages only.
+    - Potentially hundreds of 4KB pages.
+        - Example: PostgreSQL, &gt; 64 of these pages accessed.
+        - The L1 instruction TLB (ITLB): 64 4KB entries &rarr; spill into the second-level TLB (STLB).
+- <font color="#006633">Would be nice if we can use a superpage here.</font>
+
+???
+, potentially displacing 2MB page mappings for data
+
+---
+
+# Solution: Padding
+
+- Pad out the residual code region so that it can be mapped as a superpage.
+- Two ways:
+    - Ask the **linker** to extend the text section.
+    - Modify the **kernel** to automatically extend the executable segment and fill in the gap.
+        - Optimization: pages backing the data segment can be used as part of the padding.
+
+![postgres ktrace](./postgres_ktrace_last2m_padding.svg)
+
+???
+
+---
+
+class: center, middle
+
+# Problem #3: Page table data duplication.
+
+---
+
+# Problem #3: Page Table Data Duplication - Shared Libraries
+
+- Common library code referenced across different processes and applications: libc, libcrypto, libm, libthr, libssl, etc.
+
+![PT sharing](./pt_sharing_0.svg)
+
+---
+
+# Solution: Page Table Page (PTP) Sharing
+
+![PT sharing](./pt_sharing_1.svg)
+
 ---
 
 # Padding Evaluation
@@ -251,11 +272,18 @@ PostgreSQL user-space results
 
 ---
 
-# Padding - Lower OS Memory Management Overhead
+# Evaluation - Lower Pressure on Caches
 
-- Reduced amount of work done in the OS.
-  - Faster process creation and teardown.
-    - Hundreds of leaf-level PTEs &rarr; a single upper-level PTE.
+- PTP sharing: Page table data de-duplication.
+- Padding: Hundreds of leaf-level page table entries (PTEs) &rarr; a single upper-level PTE.
+
+---
+
+# Evaluation - Lower OS Memory Management Overhead
+
+- Faster process creation and teardown.
+    - PTP sharing: Insert/detach entire PTPs.
+    - Padding: Hundreds of leaf-level PTEs &rarr; a single upper-level PTE.
 
 <img src="./postgres_padding_sptp_os.png" width="626.4" height="339.6"/>
 
@@ -269,16 +297,9 @@ PostgreSQL user-space results
 
 ---
 
-# Padding
-
-Percentage of execution cycles servicing instruction address translation - user space.
-
-![FreeBSD itlb impact](./itlb_overhead_3.png)
-
----
-
 # Reducing Instruction Address Translation Overhead - Side Effects
 
+- For reference, without techniques, instruction address translation in progress during **~8%** of execution cycles.
 - Execution cycles reduced by more than the instruction address translation overhead.
     - Data access is synergistically benefiting from less contention in the STLB and caches.
 
@@ -297,19 +318,25 @@ Percentage of execution cycles servicing instruction address translation - user 
 
 # Takeaways
 
-- The overhead of instruction address translation for a variety of widely used applications is non-trivial.
+- Non-trivial overhead of instruction address translation.
   - Overhead exacerbated by two trends.
       1. Applications are getting bigger and more complex.
-          <!-- &#45; The Clang compiler: 31MB (2012) &#38;rarr; 56MB (2018). -->
-          <!-- &#45; A recent version of Node.js: 20 shared libraries. -->
       2. The level of parallelism is increasing.
-          <!-- &#45; Multi&#45;core and SMT. -->
-          <!-- &#45; Multi&#45;process applications (e.g. PostgreSQL) and multi&#45;process workloads (e.g. parallel compilation with Clang). -->
 - Two problems and three solutions.
-  - Single conservative superpage policy: Relax the policy for code.
+  - Conservative code superpage policy: relax the policy for code.
   - The residual code region: padding.
-- Improving address translation performance in the ITLB can reduce the address translation overhead for data accesses.
+- Improved instruction address translation performance &rarr; improved data address translation performance.
   - Many modern microarchitectures share the STLB between instruction and data translations.
+
+???
+1. Applications are getting bigger and more complex.
+- The Clang compiler: 31MB (2012) &rarr; 56MB (2018).
+- A recent version of Node.js: 20 shared libraries.
+
+2. The level of parallelism is increasing.
+- Multi-core and SMT.
+- Multi-process applications (e.g. PostgreSQL) and multi-process workloads (e.g. parallel compilation with Clang).
+
 
     </textarea>
     <script src="https://remarkjs.com/downloads/remark-latest.min.js">
