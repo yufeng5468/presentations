@@ -53,7 +53,7 @@ class: center, middle
 .bottom[![logos](./logos.svg)]
 
 ???
-I'm very excited to be here today to talk about the "title".
+I'm very excited to be here today to talk about the impact of instruction address translation overhead. This is joint work done by folks from Rice University and the University of Rochester.
 
 ---
 
@@ -62,11 +62,15 @@ I'm very excited to be here today to talk about the "title".
 ![Instruction address translation](./addr_trans_fast_slow_0.svg)
 
 - Significant instruction address translation overhead.
-    - PostgreSQL on a recent Intel Xeon processor: instruction address translation in progress during **14.9%** of execution cycles.
+    - PostgreSQL database on a recent Intel Xeon processor: instruction address translation in progress during **14.9%** of execution cycles.
     - Intel documentation: worth investigating if &gt;**5%**.
 
 ???
-So, to begin with, in a virtual memory system, when the processor needs to fetch an instruction from memory, it begins with a virtual address.
+So what is instruction address translation. In a virtual memory system, when the processor needs to fetch an instruction, it starts with a virtual address. Conceptually, the processor needs to translate that virtual address into a physical address before it can fetch the instruction from physical memory. **We call this instruction address translation.**
+
+Now overhead caused by IAT is actually pretty significant. For example, ...
+
+In comparison, Intel suggests that if instruction address translation is happening during more than 5% of execution cycles, then it's a potential bottleneck that is worth investigating. So it is a problem worth looking into. **In the rest of this talk, we are gonna be working with a recent quad-core Intel Skylake processor.**
 
 ---
 
@@ -75,9 +79,17 @@ So, to begin with, in a virtual memory system, when the processor needs to fetch
 ![Instruction address translation](./addr_trans_fast_slow_1.svg)
 
 ???
-Conceptually, the processor tries the fast path first, and if there isn't a hit.
+So what does address translation on these Intel processors look like? Conceptually, there is a fast path and a slow path, and the processor tries the fast path first, and then the slow path if the fast path doesn't work out.
 
-Depending on how large of a range of addresses the translation covers
+The fast path is
+
+When there is a miss in the TLB, we try the slow path, which is a page walk, where you go through this **4-level tree structure**, and at the last level, you get a table of entries, and one the entries will contain the physical address that you need. This is slow.
+
+These translation structures in the TLB and page tables, they actually cover a consecutive range of memory. The finest granularity we have is a 4K page. Not exactly a large size these days. If you go up one level, you get to a 2M superpage, which consists of 512 consecutive 4K pages.
+
+When you use superpages, ...
+
+Obviously superpages can speed up address translation. So we wanna use them.
 
 ---
 
@@ -88,13 +100,15 @@ Depending on how large of a range of addresses the translation covers
     - A conservative superpage policy: Don't bring in extra base pages merely for the purpose of creating superpages. <font color="orange">&#8263;</font>
 
 ???
-The problem with current implementations and prior work is that, although you get a varying number of superpages under different policies, and each policy excels in certain scenarios, existing policies share a common problem. That is that they essentially have a single policy for both code and data, and sometimes they just sort of ignore the code side. But as we know, code and data exhibit different locality and we showed just two slides earlier that the instruction address translation overhead is significant.
+What is the current state of OS support for code superpages?
 
-In the rest of this talk, we are going to show techniques and simple heuristics that significantly reduce instruction address translation overhead.
+Unfortunately, Linux ...
 
-Say here that we are doing FreeBSD because it at least supports the creation of code superpages from regular file systems.
+Fortunately, FreeBSD ...
 
-This is emblematic of
+We are gonna be hacking in FreeBSD because it at least has built-in support for the creation of code superpages from regular file systems.
+
+Now if we look at the superpage policy in FreeBSD, it is a rather conservative one.
 
 ---
 
@@ -104,6 +118,11 @@ This is emblematic of
     - No superpage under current policy.
     - A *simple* change in policy &rarr; ~2/3 of the main executable mapped with superpages.
         - **8.5%** reduction in execution cycles!
+
+???
+As an example, we take a look at PostgreSQL, which is emblematic of the kind of problem here.
+
+In the rest of this talk, we are going to show the kinds of problems in instruction address translation, and we are gonna show just how large of an impact the instruction address translation overhead makes.
 
 ---
 
@@ -116,7 +135,9 @@ This is emblematic of
 - Takeaways
 
 ???
-The way this talk is organized, we are gonna basically go over the problems and present our solutions one after another.
+The way this talk is organized, we are gonna basically go over the problems one after another.
+
+It's ok if the problems don't make sense at this moment, I'll explain them.
 
 ---
 
@@ -125,13 +146,18 @@ class: center, middle
 # Problem #1: A superpage policy that is too conservative for code.
 
 ???
-With that, we are gonna jump right into problem #1
+With that, we are gonna jump right into problem #1, which we already touched on in the intro. But now we are gonna take a closer look.
 
 ---
 
 # PostgreSQL Main Executable (5.953 MB) Page Access Map - First 2MB Region
 
 ![postgres ktrace](./postgres_ktrace_2m_0.svg)
+
+- 16 x 32 = 512 4KB pages = 2MB
+
+???
+This figure is very important, and it's gonna show up multiple times in this talk. Essentially what going on here is that each little square here represents
 
 ---
 
@@ -140,6 +166,9 @@ With that, we are gonna jump right into problem #1
 ![postgres ktrace](./postgres_ktrace_2m_1.svg)
 
 - 16 **consecutive** 4K pages per column.
+
+???
+So, the squares here are ordered.
 
 ---
 
@@ -151,6 +180,11 @@ With that, we are gonna jump right into problem #1
 - Second 2MB region: 241/512 4KB pages accessed.
 - Naturally, **no superpage** under the conservative policy.
 
+???
+First 2 superpage-sized regions.
+
+Not surprising, right?
+
 ---
 
 # PostgreSQL Main Executable (5.953 MB) - First 4MB, **I/O Clustering**
@@ -159,6 +193,11 @@ With that, we are gonna jump right into problem #1
 
 - **I/O clustering**: The page fault handler reads from the disk at a 64KB granularity.
 
+???
+Well, it's actually more nuanced than what we just described.
+
+brings in a 64K-aligned chunk at a time.
+
 ---
 
 # PostgreSQL Main Executable (5.953 MB) - No Superpage in First 4MB, **but Actually Close**
@@ -166,6 +205,8 @@ With that, we are gonna jump right into problem #1
 ![postgres ktrace](./postgres_ktrace_4m_red_bars_1.svg)
 
 ???
+With I/O clustering in the page fault handler, what is really happening is that a lot more pages than we previously thought are memory-resident. All of the blue stuff in this figure is memory-resident. So in the first region, only 3 ...
+
 Important observation that the 2M regions are only a few 64KB away from being fully resident. In other words, really close to qualifying for superpages.
 
 ---
@@ -179,6 +220,8 @@ Important observation that the 2M regions are only a few 64KB away from being fu
     - \# of resident 64KB clusters in a 2MB region &#8805; threshold &rarr; superpage.
 
 ???
+So we really oughta be more aggressive in bringing in code pages.
+
 Now, whenever we aggressively does something in the OS, there is a question of threshold.
 
 ---
@@ -190,6 +233,8 @@ Now, whenever we aggressively does something in the OS, there is a question of t
 
 ???
 We can see from this figure that for all of the applications, a threshold of 15 is sufficient. A lower threshold or in other words a more aggressive policy doesn't really make a difference beyond that point. We believe this observation is generally applicable because code exhibits locality in the sense that the compiler tries to place functions with caller-callee relationships next to each other in the binary executable, and so if a code region should generally be heavily accessed if it's accessed at all.
+
+Really what we are saying here is that you should be more aggressive with code superpages.
 ---
 
 # Instruction Address Translation's Impact on Data Address Translation
@@ -200,6 +245,9 @@ We can see from this figure that for all of the applications, a threshold of 15 
     - Similar TLB organization in earlier Intel microarchitectures (e.g. Haswell (2013)).
 - **Realization**: Improved instruction address translation performance &rarr; Improved data address translation performance!
 
+???
+Now, we wanna point out something rather interesting here.
+
 ---
 
 # Data Address Translation Performance Synergistically Improves
@@ -208,12 +256,17 @@ We can see from this figure that for all of the applications, a threshold of 15 
 
 ---
 
-# Problem #1 and Solution Summary
+# Problem #1 Summary
 
 ![postgres ktrace](./postgres_ktrace_4m_red_bars_2.svg)
 
 - Relaxed code superpage policy &rarr; faster execution.
 - Improved instruction address translation performance &rarr; improved data address translation performance!
+
+???
+To summarize, ...
+
+Now we've looked at the first 4M of the PostgreSQL main executable. If you remember from earlier, the size of the main executable if almost 6M, and you might be wondering what happens with the last almost 2M of the main executable. Well, that brings us to
 
 ---
 
@@ -222,7 +275,7 @@ class: center, middle
 # Problem #2: The residual code region.
 
 ???
-And so that brings us to problem #2, which is essentially the residual code region. So how do we deal with it.
+So what is it?
 
 ---
 
@@ -231,7 +284,7 @@ And so that brings us to problem #2, which is essentially the residual code regi
 ![postgres ktrace](./postgres_ktrace_last2m.svg)
 
 ???
-The total size of the main executable is almost 6M, so almost three superpage-sized regions. The first two regions were shown earlier, and this is essentially the third region.
+The total size of the main executable is almost 6M, so almost three superpage-sized regions. We discussed the first two regions in problem #1, and what you are seeing here is essentially the third region that is almost 2M in size. More precisely, it is 12 4K pages short of being 2M, and the missing 4K pages are shown with red crosses here.
 
 ---
 
@@ -258,6 +311,8 @@ The total size of the main executable is almost 6M, so almost three superpage-si
 ![postgres ktrace](./postgres_ktrace_last2m_padding.svg)
 
 ???
+Think of it this way. The OS zero-fills the last 4K page for a file if the size of the file is not an integer multiple of 4K. This is essentially the same thing happening at a larger magnitude.
+
 - Ask the **linker** to extend the text section.
 - Modify the **kernel** to automatically extend the executable segment and fill in the gap with no-ops.
 
@@ -275,11 +330,17 @@ class: center, middle
 
 ![PT sharing](./pt_sharing_0.svg)
 
+???
+This page table data, just like any other data, it's gonna compete for cache lines.
+
 ---
 
 # Solution: Page Table Page (PTP) Sharing
 
 ![PT sharing](./pt_sharing_1.svg)
+
+???
+That brings us to PTP sharing.
 
 ---
 
@@ -287,11 +348,16 @@ class: center, middle
 
 # Padding and PTP Sharing Evaluation
 
+???
+Naturally, it's gonna lead to faster execution. What we wanna show next is the kinds of side effects that these techniques have.
+
 ---
 
 # Lower Pressure on Caches
 
 ![LLC stalls](./llc_stalls.svg)
+
+???
 - PTP sharing: Page table data de-duplication.
 - Padding: Hundreds of leaf-level page table entries (PTEs) &rarr; a single upper-level PTE.
 
@@ -300,6 +366,8 @@ class: center, middle
 # Lower OS Memory Management Overhead
 
 ![OS counters](./os_counters_0.svg)
+
+???
 - Faster process creation and teardown.
     - PTP sharing: Insert/detach entire PTPs.
     - Padding: Hundreds of leaf-level PTEs &rarr; a single upper-level PTE.
@@ -327,7 +395,7 @@ class: center, middle
 # Takeaways
 
 - Non-trivial overhead of instruction address translation.
-- Three problems and their solutions.
+- Three problems.
   - Conservative code superpage policy: relax the policy.
   - The residual code region: padding.
   - Duplicate page table data: PTP sharing.
