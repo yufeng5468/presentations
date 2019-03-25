@@ -50,6 +50,8 @@ class: center, middle
 
 <div class="title-email">{xdong, sandhya}@cs.rochester.edu</div>
 
+.bottom[![logos](./logos.svg)]
+
 ???
 I'm very excited to be here today to talk about the "title".
 
@@ -127,13 +129,13 @@ With that, we are gonna jump right into problem #1
 
 ---
 
-# PostgreSQL Main Executable (5.953 MB) Page Access Map - First 2M Region
+# PostgreSQL Main Executable (5.953 MB) Page Access Map - First 2MB Region
 
 ![postgres ktrace](./postgres_ktrace_2m_0.svg)
 
 ---
 
-# PostgreSQL Main Executable (5.953 MB) Page Access Map - First 2M Region
+# PostgreSQL Main Executable (5.953 MB) Page Access Map - First 2MB Region
 
 ![postgres ktrace](./postgres_ktrace_2m_1.svg)
 
@@ -145,8 +147,8 @@ With that, we are gonna jump right into problem #1
 
 ![postgres ktrace](./postgres_ktrace_4m.svg)
 
-- First 2MB region: 259/512 4KB pages touched.
-- Second 2MB region: 241/512 4KB pages touched.
+- First 2MB region: 259/512 4KB pages accessed.
+- Second 2MB region: 241/512 4KB pages accessed.
 - Naturally, **no superpage** under the conservative policy.
 
 ---
@@ -174,7 +176,7 @@ Important observation that the 2M regions are only a few 64KB away from being fu
 
 - **Problem #1**: A superpage policy that is too conservative for code.
 - **Solution**: Bring in the non-resident 64KB clusters and create a superpage.
-    - \# of resident 64KB clusters in a 2M region &#8805; threshold &rarr; superpage.
+    - \# of resident 64KB clusters in a 2MB region &#8805; threshold &rarr; superpage.
 
 ???
 Now, whenever we aggressively does something in the OS, there is a question of threshold.
