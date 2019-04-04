@@ -68,9 +68,9 @@ I'm very excited to be here today to talk about the impact of instruction addres
 ???
 So what is instruction address translation. In a virtual memory system, when the processor needs to fetch an instruction, it starts with a virtual address. Conceptually, the processor needs to translate that virtual address into a physical address before it can fetch the instruction from physical memory. **We call this instruction address translation.**
 
-Now overhead caused by IAT is actually pretty significant. For example, ...
+Now overhead caused by IAT can be pretty significant. For example, ...
 
-In comparison, Intel suggests that if instruction address translation is happening during more than 5% of execution cycles, then it's a potential bottleneck that is worth investigating. So it is a problem worth looking into. **In the rest of this talk, we are gonna be working with a recent quad-core Intel Skylake processor.**
+In comparison, Intel suggests that if instruction address translation is happening during more than 5% of execution cycles, then it's a potential bottleneck that is worth investigating. So **clearly** it is a problem worth looking into.
 
 ---
 
