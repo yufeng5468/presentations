@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>On the Impact of Instruction Address Translation Overhead</title>
+    <title>The Impact of Instruction Address Translation Overhead</title>
     <meta charset="utf-8">
     <style type="text/css">
       /* @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz); */
@@ -64,6 +64,9 @@ I'm very excited to be here today to talk about the impact of instruction addres
 - Significant instruction address translation overhead.
     - PostgreSQL database on a recent Intel Xeon processor: instruction address translation in progress during **14.9%** of execution cycles.
     - Intel documentation: worth investigating if &gt;**5%**.
+    - Overhead exacerbated by two trends.
+        1. Applications: bigger and more complex.
+        2. The level of parallelism: constantly increasing.
 
 ???
 So what is instruction address translation. In a virtual memory system, when the processor needs to fetch an instruction, it starts with a virtual address. Conceptually, the processor needs to translate that virtual address into a physical address before it can fetch the instruction from physical memory. **We call this instruction address translation.**
@@ -72,9 +75,11 @@ Now overhead caused by IAT can be pretty significant. For example, ...
 
 In comparison, Intel suggests that if instruction address translation is happening during more than 5% of execution cycles, then it's a potential bottleneck that is worth investigating. So **clearly** it is a problem worth looking into.
 
+Now people have looked at this problem before, mostly at the compiler level, by laying out code smartly. In this work, we will look at the OS level, which has largely been ignored. I would like to note that the compile-time techniques and OS-level techniques are complementary, and so one could easily apply both types of techniques and enjoy the benefits of both worlds.
+
 ---
 
-# Instruction Address Translation - **Superpages Present Opportunities**
+# Instruction Address Translation - **Benefits of Superpages**
 
 ![Instruction address translation](./addr_trans_fast_slow_1.svg)
 
@@ -115,7 +120,7 @@ Now if we look at the superpage policy in FreeBSD, it is a rather conservative o
 # Instruction Address Translation - **Missed Opportunities**
 
 - Example: PostgreSQL on latest FreeBSD.
-    - No superpage under current policy.
+    - No code superpage under current policy.
     - A *simple* change in policy &rarr; ~2/3 of the main executable mapped with superpages.
         - **8.5%** reduction in execution cycles!
 
@@ -128,10 +133,10 @@ In the rest of this talk, we are going to show the kinds of problems in instruct
 
 # Outline
 
-- Introduction
 - Problem #1: Conservative code superpage policy
+
 - Problem #2: The residual code region
-- Problem #3: Page table data duplication
+
 - Takeaways
 
 ???
@@ -148,16 +153,16 @@ class: center, middle
 ???
 With that, we are gonna jump right into problem #1, which we already touched on in the intro. But now we are gonna take a closer look.
 
----
-
-# PostgreSQL Main Executable (5.953 MB) Page Access Map - First 2MB Region
-
-![postgres ktrace](./postgres_ktrace_2m_0.svg)
-
-- 16 x 32 = 512 4KB pages = 2MB
-
-???
-This figure is very important, and it's gonna show up multiple times in this talk. Essentially what going on here is that each little square here represents
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # PostgreSQL Main Executable (5.953 MB) Page Access Map &#45; First 2MB Region -->
+<!--  -->
+<!-- ![postgres ktrace](./postgres_ktrace_2m_0.svg) -->
+<!--  -->
+<!-- &#45; 16 x 32 = 512 4KB pages = 2MB -->
+<!--  -->
+<!-- ??? -->
+<!-- This figure is very important, and it's gonna show up multiple times in this talk. Essentially what going on here is that each little square here represents -->
 
 ---
 
@@ -165,10 +170,17 @@ This figure is very important, and it's gonna show up multiple times in this tal
 
 ![postgres ktrace](./postgres_ktrace_2m_1.svg)
 
+- 16 x 32 = 512 4KB pages = 2MB
 - 16 **consecutive** 4K pages per column.
 
 ???
-So, the squares here are ordered.
+Okay, there's a lot to unpack here. This figure is super important, and it's gonna show up repeatedly in this talk. So I'm spend some time walk you through this figure.
+
+This figure shows how much of the first 2M superpage-sized region of the postgres main executable is accessed at a 4K granularity because again that is the finest granularity as far as page mappings are concerned. Note that the entire postgres main executable is roughly 6M, but we are only looking at the first 2M here for now. Obviously we will look at the rest in the next few slides.
+
+Essentially what going on here is that each little square here represents a single 4K page. If it's black, it's accessed at some point, if it's white, it's not accessed at all. Simple. Now, the squares here are actually ordered.
+
+Obviously there are 512 square boxes because there are precisely 512 4K pages in a 2M region. They are laid out here in a 16 by 32 matrix. So each column contains 16 consecutive 4K pages. This is important, and you are gonna see why in just two slides.
 
 ---
 
@@ -184,6 +196,8 @@ So, the squares here are ordered.
 First 2 superpage-sized regions.
 
 Not surprising, right?
+
+it seems like superpages would result in loading lots of extra data from disk. "But actually if we look at how I/O from disk works.."
 
 ---
 
@@ -235,36 +249,37 @@ Now, whenever we aggressively does something in the OS, there is a question of t
 We can see from this figure that for all of the applications, a threshold of 15 is sufficient. A lower threshold or in other words a more aggressive policy doesn't really make a difference beyond that point. We believe this observation is generally applicable because code exhibits locality in the sense that the compiler tries to place functions with caller-callee relationships next to each other in the binary executable, and so if a code region should generally be heavily accessed if it's accessed at all.
 
 Really what we are saying here is that you should be more aggressive with code superpages.
----
-
-# Instruction Address Translation's Impact on Data Address Translation
-
-![TLB](./tlb_config_min.svg)
-
-- The second-level TLB (STLB): *shared* between code and data.
-    - Similar TLB organization in earlier Intel microarchitectures (e.g. Haswell (2013)).
-- **Realization**: Improved instruction address translation performance &rarr; Improved data address translation performance!
-
-???
-Now, we wanna point out something rather interesting here.
 
 ---
 
-# Data Address Translation Performance Synergistically Improves
-
-![Data page walk](./data_pgwalk_thld1.svg)
-
----
+<!-- # Instruction Address Translation's Impact on Data Address Translation -->
+<!--  -->
+<!-- ![TLB](./tlb_config_min.svg) -->
+<!--  -->
+<!-- &#45; The second&#45;level TLB (STLB): *shared* between code and data. -->
+<!--     &#45; Similar TLB organization in earlier Intel microarchitectures (e.g. Haswell (2013)). -->
+<!-- &#45; **Realization**: Improved instruction address translation performance &#38;rarr; Improved data address translation performance! -->
+<!--  -->
+<!-- ??? -->
+<!-- Now, we wanna point out something rather interesting here. -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Data Address Translation Performance Synergistically Improves -->
+<!--  -->
+<!-- ![Data page walk](./data_pgwalk_thld1.svg) -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
 
 # Problem #1 Summary
 
 ![postgres ktrace](./postgres_ktrace_4m_red_bars_2.svg)
 
 - Relaxed code superpage policy &rarr; faster execution.
-- Improved instruction address translation performance &rarr; improved data address translation performance!
+<!-- &#45; Improved instruction address translation performance &#38;rarr; improved data address translation performance! -->
 
 ???
-To summarize, ...
+To summarize, ... and essentially what we are saying here is that code pages deserve a more aggressive policy. Code and data have different access patterns, they have separate cache structures in the processor, and they should have different superpage policies.
 
 Now we've looked at the first 4M of the PostgreSQL main executable. If you remember from earlier, the size of the main executable if almost 6M, and you might be wondering what happens with the last almost 2M of the main executable. Well, that brings us to
 
@@ -316,62 +331,62 @@ Think of it this way. The OS zero-fills the last 4K page for a file if the size 
 - Ask the **linker** to extend the text section.
 - Modify the **kernel** to automatically extend the executable segment and fill in the gap with no-ops.
 
----
-
-class: center, middle
-
-# Problem #3: Page table data duplication.
-
----
-
-# Problem #3: Page Table Data Duplication
-
-- Common library code referenced across different processes and applications: libc, libcrypto, libm, etc.
-
-![PT sharing](./pt_sharing_0.svg)
-
-???
-This page table data, just like any other data, it's gonna compete for cache lines.
-
----
-
-# Solution: Page Table Page (PTP) Sharing
-
-![PT sharing](./pt_sharing_1.svg)
-
-???
-That brings us to PTP sharing.
-
----
-
-class: center, middle
-
-# Padding and PTP Sharing Evaluation
-
-???
-Naturally, it's gonna lead to faster execution. What we wanna show next is the kinds of side effects that these techniques have.
-
----
-
-# Lower Pressure on Caches
-
-![LLC stalls](./llc_stalls.svg)
-
-???
-- PTP sharing: Page table data de-duplication.
-- Padding: Hundreds of leaf-level page table entries (PTEs) &rarr; a single upper-level PTE.
-
----
-
-# Lower OS Memory Management Overhead
-
-![OS counters](./os_counters_0.svg)
-
-???
-- Faster process creation and teardown.
-    - PTP sharing: Insert/detach entire PTPs.
-    - Padding: Hundreds of leaf-level PTEs &rarr; a single upper-level PTE.
-
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- class: center, middle -->
+<!--  -->
+<!-- # Problem #3: Page table data duplication. -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Problem #3: Page Table Data Duplication -->
+<!--  -->
+<!-- &#45; Common library code referenced across different processes and applications: libc, libcrypto, libm, etc. -->
+<!--  -->
+<!-- ![PT sharing](./pt_sharing_0.svg) -->
+<!--  -->
+<!-- ??? -->
+<!-- This page table data, just like any other data, it's gonna compete for cache lines. -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Solution: Page Table Page (PTP) Sharing -->
+<!--  -->
+<!-- ![PT sharing](./pt_sharing_1.svg) -->
+<!--  -->
+<!-- ??? -->
+<!-- That brings us to PTP sharing. -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- class: center, middle -->
+<!--  -->
+<!-- # Padding and PTP Sharing Evaluation -->
+<!--  -->
+<!-- ??? -->
+<!-- Naturally, it's gonna lead to faster execution. What we wanna show next is the kinds of side effects that these techniques have. -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Lower Pressure on Caches -->
+<!--  -->
+<!-- ![LLC stalls](./llc_stalls.svg) -->
+<!--  -->
+<!-- ??? -->
+<!-- &#45; PTP sharing: Page table data de&#45;duplication. -->
+<!-- &#45; Padding: Hundreds of leaf&#45;level page table entries (PTEs) &#38;rarr; a single upper&#45;level PTE. -->
+<!--  -->
+<!-- &#45;&#45;&#45; -->
+<!--  -->
+<!-- # Lower OS Memory Management Overhead -->
+<!--  -->
+<!-- ![OS counters](./os_counters_0.svg) -->
+<!--  -->
+<!-- ??? -->
+<!-- &#45; Faster process creation and teardown. -->
+<!--     &#45; PTP sharing: Insert/detach entire PTPs. -->
+<!--     &#45; Padding: Hundreds of leaf&#45;level PTEs &#38;rarr; a single upper&#45;level PTE. -->
+<!--  -->
 ---
 
 # The Impact of Instruction Address Translation
@@ -379,27 +394,16 @@ Naturally, it's gonna lead to faster execution. What we wanna show next is the k
 - With all the techniques, execution cycles reduced by **18%**.
     - Without techniques, instruction address translation in progress during **~8%** of execution cycles.
 - Less contention in the STLB and caches.
-
----
-
-# Outline
-
-- Introduction
-- Problem #1: Conservative code superpage policy
-- Problem #2: The residual code region
-- Problem #3: Page table data duplication
-- **Takeaways**
+- Code patches included in production releases of FreeBSD since mid-2018.
 
 ---
 
 # Takeaways
 
-- Non-trivial overhead of instruction address translation.
-- Three problems.
+- Instruction address translation overhead is non-trivial (and will get worse).
+- Unique problems and solutions at the OS level.
   - Conservative code superpage policy: relax the policy.
   - The residual code region: padding.
-  - Duplicate page table data: PTP sharing.
-- Improved instruction address translation performance &rarr; improved data address translation performance.
 
 ???
 - Overhead exacerbated by two trends.
